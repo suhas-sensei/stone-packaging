@@ -1,75 +1,64 @@
-name: release
+name: Release Packages
 
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*" # Trigger the workflow when a new tag is pushed (e.g., v1.0.0)
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, macos-14]
-
+  # Existing Debian Packaging Workflow
+  debian-build:
+    runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-    - name: Set up environment
-      run: |
-        echo "Setting up environment for ${{ matrix.os }}"
-        if [ "${{ matrix.os }}" == "ubuntu-22.04" ]; then
-          echo "TARGET_ARCH=x86_64" >> $GITHUB_ENV
-        elif [ "${{ matrix.os }}" == "macos-14" ]; then
-          echo "TARGET_ARCH=arm64" >> $GITHUB_ENV
-        fi
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential debhelper bazel
 
-    - name: Build
-      run: |
-        chmod +x ./build.sh
-        ./build.sh
-    
-    - name: Test
-      run: |
-        chmod +x ./test.sh
-        ./test.sh
+      - name: Build Debian package
+        run: |
+          chmod +x ./build.sh
+          ./build.sh
+          dpkg-buildpackage -us -uc
 
-    - name: Set output
-      id: vars
-      run: echo "tag=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
+      - name: Upload Debian Package to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./path-to-debian-package/*.deb
 
-    - name: Extract files and build DEB package
-      if: matrix.os == 'ubuntu-22.04'
-      run: |
-        chmod +x ./package_deb.sh
-        ./package_deb.sh ${{ steps.vars.outputs.tag }}
+  # New Fedora Packaging Workflow
+  fedora-build:
+    runs-on: fedora-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-    - name: Rename binaries ubuntu
-      if: matrix.os == 'ubuntu-22.04'
-      run: |
-        echo "Renaming binaries to include architecture"
-        mv /tmp/stone-prover/build/bazelbin/src/starkware/main/cpu/cpu_air_prover ./cpu_air_prover-${TARGET_ARCH}
-        mv /tmp/stone-prover/build/bazelbin/src/starkware/main/cpu/cpu_air_verifier ./cpu_air_verifier-${TARGET_ARCH}
-        mv /tmp/stone-prover/stone-prover.deb /tmp/stone-prover/stone-prover-linux-${TARGET_ARCH}.deb
+      - name: Install dependencies
+        run: |
+          sudo dnf update -y
+          sudo dnf install -y rpm-build gcc make bazel
 
-    - name: Rename binaries macos
-      if: matrix.os == 'macos-14'
-      run: |
-        echo "Renaming binaries to include architecture"
-        mv /tmp/stone-prover/build/bazelbin/src/starkware/main/cpu/cpu_air_prover ./cpu_air_prover-${TARGET_ARCH}
-        mv /tmp/stone-prover/build/bazelbin/src/starkware/main/cpu/cpu_air_verifier ./cpu_air_verifier-${TARGET_ARCH}
+      - name: Build using build.sh
+        run: |
+          chmod +x ./build.sh
+          ./build.sh
 
-    - name: Verify file existence#2
-      run: |
-        ls -la ./
-        ls -la /tmp/stone-prover/
+      - name: Package RPM
+        run: |
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp ./fedora/stone-prover.spec ~/rpmbuild/SPECS/
+          rpmbuild -ba ~/rpmbuild/SPECS/stone-prover.spec \
+            --define "_topdir $HOME/rpmbuild" \
+            --define "version ${GITHUB_REF#refs/tags/}" \
+            --define "arch x86_64"
 
-    - name: Upload files to a GitHub release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: |
-         ./cpu_air*
-         /tmp/stone-prover/*.deb
+      - name: Verify RPM
+        run: ls -la ~/rpmbuild/RPMS/x86_64/
 
+      - name: Upload RPM to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ~/rpmbuild/RPMS/x86_64/*.rpm
